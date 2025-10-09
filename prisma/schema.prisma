@@ -1,0 +1,285 @@
+// Prisma Schema for Plan My Journey
+// Database: MySQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  trips          Trip[]
+  poolGroups     PoolGroup[]
+  groupMembers   GroupMember[]
+  bookings       Booking[]
+
+  @@map("users")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+// ============================================
+// TRIP MANAGEMENT
+// ============================================
+
+model Trip {
+  id          String   @id @default(cuid())
+  source      String
+  destination String
+  startDate   DateTime
+  endDate     DateTime
+  budget      Int      // Budget in INR
+  travelers   Int      @default(1) // Number of travelers
+  status      TripStatus @default(PLANNED)
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  createdBy   User        @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  poolGroups  PoolGroup[]
+  bookings    Booking[]
+  packages    Package[]
+
+  @@index([createdById])
+  @@index([destination])
+  @@index([startDate])
+  @@map("trips")
+}
+
+enum TripStatus {
+  PLANNED
+  BOOKED
+  COMPLETED
+  CANCELLED
+}
+
+// ============================================
+// TRAVEL POOLING / GROUP MANAGEMENT
+// ============================================
+
+model PoolGroup {
+  id          String      @id @default(cuid())
+  tripId      String
+  groupSize   Int         // Maximum group size
+  currentSize Int         @default(1) // Current number of members
+  status      GroupStatus @default(OPEN)
+  description String?     @db.Text
+  createdById String
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  // Relations
+  trip        Trip          @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdBy   User          @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  members     GroupMember[]
+  packages    Package[]
+
+  @@index([tripId])
+  @@index([createdById])
+  @@index([status])
+  @@map("pool_groups")
+}
+
+enum GroupStatus {
+  OPEN
+  CLOSED
+  LOCKED
+  COMPLETED
+}
+
+model GroupMember {
+  id          String       @id @default(cuid())
+  poolGroupId String
+  userId      String
+  status      MemberStatus @default(PENDING)
+  joinedAt    DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  // Relations
+  poolGroup PoolGroup @relation(fields: [poolGroupId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([poolGroupId, userId])
+  @@index([poolGroupId])
+  @@index([userId])
+  @@index([status])
+  @@map("group_members")
+}
+
+enum MemberStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  BOOKED
+  CANCELLED
+}
+
+// ============================================
+// BUS MANAGEMENT
+// ============================================
+
+model Bus {
+  id           String   @id @default(cuid())
+  busNumber    String   @unique
+  busName      String
+  capacity     Int
+  pricePerSeat Int      // Price in INR
+  amenities    String?  @db.Text // JSON string: AC, WiFi, etc.
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  seats    BusSeat[]
+  packages Package[]
+
+  @@map("buses")
+}
+
+model BusSeat {
+  id         String   @id @default(cuid())
+  busId      String
+  seatNumber String
+  isBooked   Boolean  @default(false)
+  bookingId  String?  @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  bus     Bus      @relation(fields: [busId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id])
+
+  @@unique([busId, seatNumber])
+  @@index([busId])
+  @@index([isBooked])
+  @@map("bus_seats")
+}
+
+// ============================================
+// HOTEL MANAGEMENT
+// ============================================
+
+model Hotel {
+  id           String   @id @default(cuid())
+  name         String
+  location     String
+  address      String?  @db.Text
+  totalRooms   Int
+  pricePerRoom Int      // Price in INR
+  rating       Float?   @default(0)
+  amenities    String?  @db.Text // JSON string: Pool, Gym, etc.
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  rooms    HotelRoom[]
+  packages Package[]
+
+  @@index([location])
+  @@map("hotels")
+}
+
+model HotelRoom {
+  id         String   @id @default(cuid())
+  hotelId    String
+  roomNumber String
+  roomType   String   @default("Standard") // Standard, Deluxe, Suite
+  isBooked   Boolean  @default(false)
+  bookingId  String?  @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  hotel   Hotel    @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id])
+
+  @@unique([hotelId, roomNumber])
+  @@index([hotelId])
+  @@index([isBooked])
+  @@map("hotel_rooms")
+}
+
+// ============================================
+// BOOKING MANAGEMENT
+// ============================================
+
+model Booking {
+  id          String        @id @default(cuid())
+  userId      String
+  tripId      String
+  busSeatId   String?
+  hotelRoomId String?
+  totalPrice  Int           // Total price in INR
+  status      BookingStatus @default(PENDING)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  // Relations
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trip      Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  busSeat   BusSeat?
+  hotelRoom HotelRoom?
+
+  @@index([userId])
+  @@index([tripId])
+  @@index([status])
+  @@map("bookings")
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+// ============================================
+// PACKAGE MANAGEMENT (Admin Creates)
+// ============================================
+
+model Package {
+  id          String   @id @default(cuid())
+  name        String
+  description String?  @db.Text
+  tripId      String?
+  poolGroupId String?
+  busId       String
+  hotelId     String
+  price       Int      // Package price in INR
+  discount    Int?     @default(0) // Discount percentage
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  trip      Trip?      @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  poolGroup PoolGroup? @relation(fields: [poolGroupId], references: [id], onDelete: SetNull)
+  bus       Bus        @relation(fields: [busId], references: [id], onDelete: Cascade)
+  hotel     Hotel      @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  @@index([tripId])
+  @@index([poolGroupId])
+  @@index([busId])
+  @@index([hotelId])
+  @@index([isActive])
+  @@map("packages")
+}
