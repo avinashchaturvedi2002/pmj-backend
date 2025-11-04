@@ -5,7 +5,8 @@ const {
   getPackageById,
   createPackage,
   updatePackage,
-  deletePackage
+  deletePackage,
+  suggestPackages
 } = require('../controllers/packageController');
 const { protect, adminOnly } = require('../middleware/auth');
 
@@ -13,6 +14,7 @@ const { protect, adminOnly } = require('../middleware/auth');
 router.use(protect);
 
 router.get('/', getAllPackages);
+router.get('/suggest/:tripId', suggestPackages);
 router.get('/:id', getPackageById);
 
 // Admin only routes
@@ -21,5 +23,6 @@ router.put('/:id', adminOnly, updatePackage);
 router.delete('/:id', adminOnly, deletePackage);
 
 module.exports = router;
+
 
 

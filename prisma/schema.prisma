@@ -28,6 +28,7 @@ model User {
   poolGroups     PoolGroup[]
   groupMembers   GroupMember[]
   bookings       Booking[]
+  payments       Payment[]
 
   @@map("users")
 }
@@ -43,22 +44,24 @@ enum Role {
 
 model Trip {
   id          String   @id @default(cuid())
-  source      String
-  destination String
-  startDate   DateTime
-  endDate     DateTime
-  budget      Int      // Budget in INR
-  travelers   Int      @default(1) // Number of travelers
-  status      TripStatus @default(PLANNED)
-  createdById String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  source                String
+  destination           String
+  startDate             DateTime
+  endDate               DateTime
+  budget                Int      // Total budget in INR
+  activityBudgetPercent Int      @default(30) // Percentage for activities/food/misc (0-75)
+  travelers             Int      @default(1) // Number of travelers
+  status                TripStatus @default(PLANNED)
+  createdById           String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   // Relations
   createdBy   User        @relation(fields: [createdById], references: [id], onDelete: Cascade)
   poolGroups  PoolGroup[]
   bookings    Booking[]
   packages    Package[]
+  payments    Payment[]
 
   @@index([createdById])
   @@index([destination])
@@ -78,25 +81,32 @@ enum TripStatus {
 // ============================================
 
 model PoolGroup {
-  id          String      @id @default(cuid())
-  tripId      String
-  groupSize   Int         // Maximum group size
-  currentSize Int         @default(1) // Current number of members
-  status      GroupStatus @default(OPEN)
-  description String?     @db.Text
-  createdById String
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id                String      @id @default(cuid())
+  tripId            String
+  groupSize         Int         // Maximum group size
+  currentSize       Int         @default(1) // Current number of members
+  status            GroupStatus @default(OPEN)
+  description       String?     @db.Text
+  createdById       String
+  perPersonCost     Int?        // Fixed cost per member in INR
+  selectedPackageId String?     // Package selected by admin
+  packageApprovedBy String?     @db.Text // JSON array of user IDs who approved
+  paymentDeadline   DateTime?   // Deadline for payment
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
 
   // Relations
-  trip        Trip          @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  createdBy   User          @relation(fields: [createdById], references: [id], onDelete: Cascade)
-  members     GroupMember[]
-  packages    Package[]
+  trip            Trip          @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdBy       User          @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  selectedPackage Package?      @relation("SelectedPackage", fields: [selectedPackageId], references: [id], onDelete: SetNull)
+  members         GroupMember[]
+  packages        Package[]     @relation("GroupPackages")
+  payments        Payment[]
 
   @@index([tripId])
   @@index([createdById])
   @@index([status])
+  @@index([selectedPackageId])
   @@map("pool_groups")
 }
 
@@ -108,30 +118,37 @@ enum GroupStatus {
 }
 
 model GroupMember {
-  id          String       @id @default(cuid())
-  poolGroupId String
-  userId      String
-  status      MemberStatus @default(PENDING)
-  joinedAt    DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id            String        @id @default(cuid())
+  poolGroupId   String
+  userId        String
+  status        MemberStatus  @default(PENDING)
+  paymentStatus PaymentStatus @default(PENDING)
+  amountPaid    Int?          // Amount paid by this member in INR
+  paidAt        DateTime?     // When payment was completed
+  joinedAt      DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
   // Relations
   poolGroup PoolGroup @relation(fields: [poolGroupId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments  Payment[]
 
   @@unique([poolGroupId, userId])
   @@index([poolGroupId])
   @@index([userId])
   @@index([status])
+  @@index([paymentStatus])
   @@map("group_members")
 }
 
 enum MemberStatus {
-  PENDING
-  APPROVED
-  REJECTED
-  BOOKED
-  CANCELLED
+  PENDING         // Join request pending
+  APPROVED        // Approved by admin, awaiting payment
+  PAYMENT_PENDING // Payment initiated
+  PAID            // Payment successful
+  PAYMENT_FAILED  // Payment failed
+  REJECTED        // Join request rejected
+  CANCELLED       // Member left or cancelled
 }
 
 // ============================================
@@ -149,8 +166,10 @@ model Bus {
   updatedAt    DateTime @updatedAt
 
   // Relations
-  seats    BusSeat[]
-  packages Package[]
+  seats       BusSeat[]
+  packages    Package[]
+  busBookings BusBooking[]
+  payments    Payment[]
 
   @@map("buses")
 }
@@ -160,13 +179,11 @@ model BusSeat {
   busId      String
   seatNumber String
   isBooked   Boolean  @default(false)
-  bookingId  String?  @unique
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   // Relations
-  bus     Bus      @relation(fields: [busId], references: [id], onDelete: Cascade)
-  booking Booking? @relation(fields: [bookingId], references: [id])
+  bus Bus @relation(fields: [busId], references: [id], onDelete: Cascade)
 
   @@unique([busId, seatNumber])
   @@index([busId])
@@ -191,8 +208,10 @@ model Hotel {
   updatedAt    DateTime @updatedAt
 
   // Relations
-  rooms    HotelRoom[]
-  packages Package[]
+  rooms         HotelRoom[]
+  packages      Package[]
+  hotelBookings HotelBooking[]
+  payments      Payment[]
 
   @@index([location])
   @@map("hotels")
@@ -204,13 +223,11 @@ model HotelRoom {
   roomNumber String
   roomType   String   @default("Standard") // Standard, Deluxe, Suite
   isBooked   Boolean  @default(false)
-  bookingId  String?  @unique
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   // Relations
-  hotel   Hotel    @relation(fields: [hotelId], references: [id], onDelete: Cascade)
-  booking Booking? @relation(fields: [bookingId], references: [id])
+  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Cascade)
 
   @@unique([hotelId, roomNumber])
   @@index([hotelId])
@@ -226,30 +243,35 @@ model Booking {
   id          String        @id @default(cuid())
   userId      String
   tripId      String
-  busSeatId   String?
-  hotelRoomId String?
+  packageId   String?       // Optional package reference
   totalPrice  Int           // Total price in INR
-  status      BookingStatus @default(PENDING)
+  status      BookingStatus @default(INITIATED)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
   // Relations
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  trip      Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  busSeat   BusSeat?
-  hotelRoom HotelRoom?
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trip          Trip           @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  package       Package?       @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  payments      Payment[]
+  busBookings   BusBooking[]   // Multiple bus bookings (outbound + return)
+  hotelBookings HotelBooking[] // Hotel bookings
 
   @@index([userId])
   @@index([tripId])
+  @@index([packageId])
   @@index([status])
   @@map("bookings")
 }
 
 enum BookingStatus {
-  PENDING
-  CONFIRMED
-  CANCELLED
-  COMPLETED
+  INITIATED       // Booking initiated
+  PENDING_PAYMENT // Awaiting payment
+  PAYMENT_FAILED  // Payment failed
+  CONFIRMED       // Payment successful, booking confirmed
+  CANCELLED       // Booking cancelled
+  COMPLETED       // Trip completed
+  REFUNDED        // Refund processed
 }
 
 // ============================================
@@ -271,10 +293,13 @@ model Package {
   updatedAt   DateTime @updatedAt
 
   // Relations
-  trip      Trip?      @relation(fields: [tripId], references: [id], onDelete: SetNull)
-  poolGroup PoolGroup? @relation(fields: [poolGroupId], references: [id], onDelete: SetNull)
-  bus       Bus        @relation(fields: [busId], references: [id], onDelete: Cascade)
-  hotel     Hotel      @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  trip                 Trip?       @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  poolGroup            PoolGroup?  @relation("GroupPackages", fields: [poolGroupId], references: [id], onDelete: SetNull)
+  bus                  Bus         @relation(fields: [busId], references: [id], onDelete: Cascade)
+  hotel                Hotel       @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  selectedByPoolGroups PoolGroup[] @relation("SelectedPackage")
+  payments             Payment[]
+  bookings             Booking[]
 
   @@index([tripId])
   @@index([poolGroupId])
@@ -282,4 +307,112 @@ model Package {
   @@index([hotelId])
   @@index([isActive])
   @@map("packages")
+}
+
+// ============================================
+// PAYMENT MANAGEMENT
+// ============================================
+
+model Payment {
+  id                  String        @id @default(cuid())
+  userId              String
+  bookingId           String?
+  poolGroupId         String?
+  groupMemberId       String?
+  tripId              String?       // Store trip for direct package purchases
+  packageId           String?       // Store package for direct purchases
+  busId               String?       // Store bus for booking creation
+  hotelId             String?       // Store hotel for booking creation
+  amount              Int           // Amount in paise (INR * 100)
+  currency            String        @default("INR")
+  razorpayOrderId     String?       @unique
+  razorpayPaymentId   String?       @unique
+  razorpaySignature   String?       @db.Text
+  status              PaymentStatus @default(PENDING)
+  paymentMethod       String?       // card, upi, netbanking, etc.
+  failureReason       String?       @db.Text
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  // Relations
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking     Booking?     @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  poolGroup   PoolGroup?   @relation(fields: [poolGroupId], references: [id], onDelete: SetNull)
+  groupMember GroupMember? @relation(fields: [groupMemberId], references: [id], onDelete: SetNull)
+  trip        Trip?        @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  package     Package?     @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  bus         Bus?         @relation(fields: [busId], references: [id], onDelete: SetNull)
+  hotel       Hotel?       @relation(fields: [hotelId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([bookingId])
+  @@index([poolGroupId])
+  @@index([groupMemberId])
+  @@index([tripId])
+  @@index([packageId])
+  @@index([status])
+  @@index([razorpayOrderId])
+  @@index([razorpayPaymentId])
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  PENDING
+  INITIATED
+  PROCESSING
+  SUCCESS
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+// ============================================
+// DATE-BASED AVAILABILITY TRACKING
+// ============================================
+
+model BusBooking {
+  id           String   @id @default(cuid())
+  bookingId    String   // Link to main booking
+  busId        String
+  bookingDate  DateTime @db.Date // Date of journey
+  seatsBooked  Int      // Number of seats booked for this date
+  seatNumbers  String?  @db.Text // JSON array of seat numbers booked
+  pricePerSeat Int      // Price per seat at time of booking
+  totalPrice   Int      // seatsBooked * pricePerSeat
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  bus     Bus     @relation(fields: [busId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@index([busId])
+  @@index([bookingDate])
+  @@map("bus_bookings")
+}
+
+model HotelBooking {
+  id           String   @id @default(cuid())
+  bookingId    String   // Link to main booking
+  hotelId      String
+  checkIn      DateTime @db.Date
+  checkOut     DateTime @db.Date
+  roomsBooked  Int      // Number of rooms booked for this date range
+  roomNumbers  String?  @db.Text // JSON array of room numbers booked
+  pricePerRoom Int      // Price per room per night at time of booking
+  totalPrice   Int      // roomsBooked * nights * pricePerRoom
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  hotel   Hotel   @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@index([hotelId])
+  @@index([checkIn])
+  @@index([checkOut])
+  @@index([hotelId, checkIn, checkOut])
+  @@map("hotel_bookings")
 }

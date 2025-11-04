@@ -241,4 +241,302 @@ exports.deletePackage = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc    Get package suggestions for a trip
+ * @route   GET /api/packages/suggest/:tripId
+ * @access  Private
+ */
+exports.suggestPackages = async (req, res, next) => {
+  try {
+    const { tripId } = req.params;
+    
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10; // Default 10 packages per page
+    const skip = (page - 1) * limit;
+
+    console.log(`\n${'='.repeat(80)}`);
+    console.log(`🔍 PACKAGE SUGGESTION REQUEST`);
+    console.log(`${'='.repeat(80)}`);
+    console.log(`Trip ID: ${tripId}`);
+    console.log(`User ID: ${req.user.id}`);
+    console.log(`User Role: ${req.user.role}`);
+    console.log(`Pagination: Page ${page}, Limit ${limit}`);
+
+    // Get trip details
+    const trip = await prisma.trip.findUnique({
+      where: { id: tripId }
+    });
+
+    if (!trip) {
+      console.log(`❌ ERROR: Trip not found with ID: ${tripId}`);
+      return sendError(res, 'Trip not found', 404);
+    }
+
+    console.log(`✅ Trip found:`, {
+      id: trip.id,
+      source: trip.source,
+      destination: trip.destination,
+      budget: trip.budget,
+      travelers: trip.travelers
+    });
+
+    // Check if user owns the trip
+    if (trip.createdById !== req.user.id && req.user.role !== 'ADMIN') {
+      return sendError(res, 'Access denied', 403);
+    }
+
+    // Calculate trip duration in nights
+    const startDate = new Date(trip.startDate);
+    const endDate = new Date(trip.endDate);
+    const nights = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
+
+    if (nights <= 0) {
+      return sendError(res, 'Invalid trip dates', 400);
+    }
+
+    // Debug logging
+    console.log('Fetching packages for trip:', {
+      tripId,
+      source: trip.source,
+      destination: trip.destination,
+      startDate,
+      endDate,
+      nights,
+      budget: trip.budget,
+      travelers: trip.travelers
+    });
+
+    // Get all buses and hotels matching destination
+    const [buses, hotels] = await Promise.all([
+      prisma.bus.findMany({
+        include: {
+          busBookings: {
+            where: {
+              bookingDate: {
+                in: [startDate, endDate]
+              }
+            }
+          }
+        }
+      }),
+      prisma.hotel.findMany({
+        where: {
+          location: {
+            contains: trip.destination
+          }
+        },
+        include: {
+          hotelBookings: {
+            where: {
+              OR: [
+                {
+                  AND: [
+                    { checkIn: { lte: startDate } },
+                    { checkOut: { gte: startDate } }
+                  ]
+                },
+                {
+                  AND: [
+                    { checkIn: { lte: endDate } },
+                    { checkOut: { gte: endDate } }
+                  ]
+                },
+                {
+                  AND: [
+                    { checkIn: { gte: startDate } },
+                    { checkOut: { lte: endDate } }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      })
+    ]);
+
+    console.log(`\n📊 Database Query Results:`);
+    console.log(`   Fetched ${buses.length} buses`);
+    console.log(`   Fetched ${hotels.length} hotels`);
+
+    // Calculate available seats/rooms for each bus/hotel
+    const availableBuses = buses.map(bus => {
+      const bookedSeatsOnStart = bus.busBookings
+        .filter(b => new Date(b.bookingDate).getTime() === startDate.getTime())
+        .reduce((sum, b) => sum + b.seatsBooked, 0);
+      
+      const bookedSeatsOnEnd = bus.busBookings
+        .filter(b => new Date(b.bookingDate).getTime() === endDate.getTime())
+        .reduce((sum, b) => sum + b.seatsBooked, 0);
+
+      const maxBookedSeats = Math.max(bookedSeatsOnStart, bookedSeatsOnEnd);
+      const availableSeats = bus.capacity - maxBookedSeats;
+
+      return {
+        ...bus,
+        availableSeats
+      };
+    }).filter(bus => bus.availableSeats >= trip.travelers);
+
+    const availableHotels = hotels.map(hotel => {
+      const bookedRooms = hotel.hotelBookings.reduce((sum, b) => sum + b.roomsBooked, 0);
+      const availableRooms = hotel.totalRooms - bookedRooms;
+
+      return {
+        ...hotel,
+        availableRooms
+      };
+    }).filter(hotel => {
+      const roomsNeeded = Math.ceil(trip.travelers / 2); // Assuming 2 people per room
+      return hotel.availableRooms >= roomsNeeded;
+    });
+
+    // Generate package combinations
+    const suggestions = [];
+
+    console.log(`   Available buses (after filtering): ${availableBuses.length}`);
+    console.log(`   Available hotels (after filtering): ${availableHotels.length}`);
+    console.log(`\n🔄 Generating package combinations...`);
+
+    for (const bus of availableBuses) {
+      for (const hotel of availableHotels) {
+        // Calculate total cost
+        // Bus: round trip (to and from destination)
+        const busRoundTripCost = bus.pricePerSeat * trip.travelers * 2;
+        
+        // Hotel: nights * rooms needed
+        const roomsNeeded = Math.ceil(trip.travelers / 2);
+        const hotelCost = hotel.pricePerRoom * nights * roomsNeeded;
+        
+        const totalCost = busRoundTripCost + hotelCost;
+
+        // Only include if within budget
+        if (totalCost <= trip.budget) {
+          suggestions.push({
+            bus: {
+              id: bus.id,
+              busNumber: bus.busNumber,
+              busName: bus.busName,
+              pricePerSeat: bus.pricePerSeat,
+              capacity: bus.capacity,
+              availableSeats: bus.availableSeats,
+              amenities: bus.amenities
+            },
+            hotel: {
+              id: hotel.id,
+              name: hotel.name,
+              location: hotel.location,
+              pricePerRoom: hotel.pricePerRoom,
+              rating: hotel.rating,
+              availableRooms: hotel.availableRooms,
+              amenities: hotel.amenities
+            },
+            pricing: {
+              busRoundTripCost,
+              hotelCost,
+              totalCost,
+              perPersonCost: Math.ceil(totalCost / trip.travelers),
+              nights,
+              roomsNeeded
+            },
+            withinBudget: true,
+            budgetRemaining: trip.budget - totalCost
+          });
+        }
+      }
+    }
+
+    // Sort by total cost (cheapest first)
+    suggestions.sort((a, b) => a.pricing.totalCost - b.pricing.totalCost);
+
+    // Calculate budget breakdown
+    const activityBudgetPercent = trip.activityBudgetPercent || 30;
+    const activityBudget = Math.round((trip.budget * activityBudgetPercent) / 100);
+    const packageBudget = trip.budget - activityBudget;
+    
+    // Define acceptable range (±₹1000)
+    const minBudget = packageBudget - 1000;
+    const maxBudget = packageBudget + 1000;
+    
+    // Filter packages within range
+    const filteredSuggestions = suggestions.filter(pkg => 
+      pkg.pricing.totalCost >= minBudget && 
+      pkg.pricing.totalCost <= maxBudget
+    );
+
+    console.log(`\n💰 BUDGET BREAKDOWN:`);
+    console.log(`   Total Budget: ₹${trip.budget}`);
+    console.log(`   Activity Budget (${activityBudgetPercent}%): ₹${activityBudget}`);
+    console.log(`   Package Budget (${100 - activityBudgetPercent}%): ₹${packageBudget}`);
+    console.log(`   Filter Range: ₹${minBudget} - ₹${maxBudget}`);
+
+    const totalSuggestions = filteredSuggestions.length;
+    const totalPages = Math.ceil(totalSuggestions / limit);
+    
+    // Apply pagination to filtered results
+    const paginatedSuggestions = filteredSuggestions.slice(skip, skip + limit);
+
+    console.log(`\n📊 FINAL RESULTS:`);
+    console.log(`   Total buses: ${buses.length}, Available: ${availableBuses.length}`);
+    console.log(`   Total hotels: ${hotels.length}, Available: ${availableHotels.length}`);
+    console.log(`   All combinations: ${suggestions.length}`);
+    console.log(`   In budget range: ${totalSuggestions}`);
+    console.log(`   Returning: ${paginatedSuggestions.length} (Page ${page}/${totalPages})`);
+    
+    if (filteredSuggestions.length === 0) {
+      console.log(`\n⚠️ WARNING: No packages in budget range!`);
+      if (availableBuses.length === 0) console.log(`   - No buses with ${trip.travelers}+ seats`);
+      if (availableHotels.length === 0) console.log(`   - No hotels in ${trip.destination}`);
+      if (suggestions.length > 0) {
+        console.log(`   - ${suggestions.length} packages found but outside ₹${minBudget}-₹${maxBudget} range`);
+      }
+    }
+
+    const responseData = {
+      trip: {
+        id: trip.id,
+        source: trip.source,
+        destination: trip.destination,
+        startDate: trip.startDate,
+        endDate: trip.endDate,
+        budget: trip.budget,
+        activityBudgetPercent,
+        travelers: trip.travelers,
+        nights
+      },
+      budgetBreakdown: {
+        total: trip.budget,
+        packageBudget,
+        activityBudget,
+        activityBudgetPercent,
+        packageBudgetPercent: 100 - activityBudgetPercent
+      },
+      filterRange: {
+        min: minBudget,
+        max: maxBudget
+      },
+      suggestions: paginatedSuggestions,
+      pagination: {
+        page,
+        limit,
+        total: totalSuggestions,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      }
+    };
+
+    console.log(`\n✅ Sending response with ${paginatedSuggestions.length} suggestions (page ${page}/${totalPages})`);
+    console.log(`${'='.repeat(80)}\n`);
+
+    sendSuccess(res, responseData, 'Package suggestions retrieved successfully');
+  } catch (error) {
+    console.error('\n❌ ERROR in suggestPackages:', error);
+    console.error('Stack trace:', error.stack);
+    console.log(`${'='.repeat(80)}\n`);
+    next(error);
+  }
+};
+
+
 

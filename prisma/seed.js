@@ -70,6 +70,9 @@ async function main() {
   // 1) Clear existing data (careful in prod)
   console.log('🧹 Clearing existing tables (this may be slow for large datasets)...');
   // We delete in order that respects FK constraints
+  await prisma.payment.deleteMany().catch(() => {});
+  await prisma.busBooking.deleteMany().catch(() => {});
+  await prisma.hotelBooking.deleteMany().catch(() => {});
   await prisma.booking.deleteMany().catch(() => {});
   await prisma.groupMember.deleteMany().catch(() => {});
   await prisma.package.deleteMany().catch(() => {});
@@ -270,6 +273,7 @@ async function main() {
         startDate: faker.date.soon({ days: randomInt(10, 90) }),
         endDate: faker.date.soon({ days: randomInt(91, 120) }),
         budget: randomInt(5000, 50000),
+        activityBudgetPercent: randomInt(20, 50),
         travelers: randomInt(1, 4),
         status: 'PLANNED',
         createdById: users[randomInt(0, users.length - 1)].id
@@ -290,10 +294,11 @@ async function main() {
   });
 
   // pick random bus and hotel for a package
-  const someBus = (await prisma.bus.findFirst()) || null;
-  const someHotel = (await prisma.hotel.findFirst()) || null;
+  const someBus = allBuses.length > 0 ? await prisma.bus.findFirst() : null;
+  const someHotel = allHotels.length > 0 ? await prisma.hotel.findFirst() : null;
+  let samplePackage = null;
   if (someBus && someHotel) {
-    await prisma.package.create({
+    samplePackage = await prisma.package.create({
       data: {
         name: 'Sample Package - Prototype',
         description: 'Auto generated sample package with one bus and one hotel',
@@ -307,32 +312,96 @@ async function main() {
     });
   }
 
-  // Create one confirmed booking using available seat and room (if available)
-  const availableSeat = await prisma.busSeat.findFirst({ where: { isBooked: false } });
-  const availableRoom = await prisma.hotelRoom.findFirst({ where: { isBooked: false } });
-
-  if (availableSeat && availableRoom) {
+  // Create one confirmed booking with proper BusBooking and HotelBooking
+  if (trips.length > 0 && allBuses.length > 0 && allHotels.length > 0) {
+    const sampleTrip = trips[0];
+    const sampleBus = await prisma.bus.findFirst();
+    const sampleHotel = await prisma.hotel.findFirst();
+    
+    // Calculate pricing
+    const travelers = 2;
+    const busPricePerSeat = sampleBus.pricePerSeat;
+    const hotelPricePerRoom = sampleHotel.pricePerRoom;
+    const nights = 3;
+    const roomsNeeded = Math.ceil(travelers / 2);
+    
+    const busOutboundCost = busPricePerSeat * travelers;
+    const busReturnCost = busPricePerSeat * travelers;
+    const hotelCost = hotelPricePerRoom * nights * roomsNeeded;
+    const totalPrice = busOutboundCost + busReturnCost + hotelCost;
+    
     const booking = await prisma.booking.create({
       data: {
         userId: users[0].id,
-        tripId: trips[0].id,
-        totalPrice: randomInt(5000, 30000),
+        tripId: sampleTrip.id,
+        packageId: samplePackage ? samplePackage.id : null,
+        totalPrice: totalPrice,
         status: 'CONFIRMED'
       }
     });
-
-    await prisma.busSeat.update({
-      where: { id: availableSeat.id },
-      data: { isBooked: true, bookingId: booking.id }
+    
+    // Create payment record for this booking
+    await prisma.payment.create({
+      data: {
+        userId: users[0].id,
+        bookingId: booking.id,
+        tripId: sampleTrip.id,
+        packageId: samplePackage ? samplePackage.id : null,
+        busId: sampleBus.id,
+        hotelId: sampleHotel.id,
+        amount: totalPrice * 100, // Convert to paise
+        currency: 'INR',
+        razorpayOrderId: `order_${faker.string.alphanumeric(14)}`,
+        razorpayPaymentId: `pay_${faker.string.alphanumeric(14)}`,
+        status: 'SUCCESS',
+        paymentMethod: faker.helpers.arrayElement(['card', 'upi', 'netbanking'])
+      }
     });
-
-    await prisma.hotelRoom.update({
-      where: { id: availableRoom.id },
-      data: { isBooked: true, bookingId: booking.id }
+    
+    // Create outbound bus booking
+    await prisma.busBooking.create({
+      data: {
+        bookingId: booking.id,
+        busId: sampleBus.id,
+        bookingDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
+        seatsBooked: travelers,
+        seatNumbers: null,
+        pricePerSeat: busPricePerSeat,
+        totalPrice: busOutboundCost
+      }
     });
-    console.log('✅ Created one sample confirmed booking (seat+room reserved).');
+    
+    // Create return bus booking
+    await prisma.busBooking.create({
+      data: {
+        bookingId: booking.id,
+        busId: sampleBus.id,
+        bookingDate: new Date(Date.now() + (7 + nights) * 24 * 60 * 60 * 1000),
+        seatsBooked: travelers,
+        seatNumbers: null,
+        pricePerSeat: busPricePerSeat,
+        totalPrice: busReturnCost
+      }
+    });
+    
+    // Create hotel booking
+    await prisma.hotelBooking.create({
+      data: {
+        bookingId: booking.id,
+        hotelId: sampleHotel.id,
+        checkIn: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        checkOut: new Date(Date.now() + (7 + nights) * 24 * 60 * 60 * 1000),
+        roomsBooked: roomsNeeded,
+        roomNumbers: null,
+        pricePerRoom: hotelPricePerRoom,
+        totalPrice: hotelCost
+      }
+    });
+    
+    console.log('✅ Created one sample confirmed booking with bus & hotel bookings.');
+    console.log(`   Total: ₹${totalPrice} (Bus: ₹${busOutboundCost + busReturnCost}, Hotel: ₹${hotelCost})`);
   } else {
-    console.log('⚠️ Could not find available seat & room to create sample booking (all booked?).');
+    console.log('⚠️ Skipped booking creation - missing trips, buses, or hotels.');
   }
 
   // Final summary
@@ -344,7 +413,10 @@ async function main() {
     busSeats: await prisma.busSeat.count(),
     trips: await prisma.trip.count(),
     packages: await prisma.package.count(),
-    bookings: await prisma.booking.count()
+    bookings: await prisma.booking.count(),
+    payments: await prisma.payment.count(),
+    busBookings: await prisma.busBooking.count(),
+    hotelBookings: await prisma.hotelBooking.count()
   };
 
   console.log('\n✨ Large seeding completed!');
@@ -357,6 +429,9 @@ async function main() {
   console.log(`  - Trips: ${finalCounts.trips}`);
   console.log(`  - Packages: ${finalCounts.packages}`);
   console.log(`  - Bookings: ${finalCounts.bookings}`);
+  console.log(`  - Payments: ${finalCounts.payments}`);
+  console.log(`  - Bus Bookings: ${finalCounts.busBookings}`);
+  console.log(`  - Hotel Bookings: ${finalCounts.hotelBookings}`);
   console.log('\n🔑 Admin Credentials:');
   console.log(`   Email: ${CONFIG.ADMIN_EMAIL}`);
   console.log(`   Password: ${CONFIG.ADMIN_PASS}`);

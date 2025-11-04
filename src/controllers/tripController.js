@@ -11,7 +11,7 @@ const prisma = new PrismaClient();
  */
 exports.createTrip = async (req, res, next) => {
   try {
-    const { source, destination, startDate, endDate, budget, travelers } = req.body;
+    const { source, destination, startDate, endDate, budget, travelers, activityBudgetPercent } = req.body;
 
     // Validation
     if (!source || !destination || !startDate || !endDate || !budget) {
@@ -34,6 +34,12 @@ exports.createTrip = async (req, res, next) => {
       return sendError(res, 'Budget and travelers must be positive numbers', 400);
     }
 
+    // Validate activityBudgetPercent (0-75%)
+    const activityPercent = activityBudgetPercent !== undefined ? parseInt(activityBudgetPercent) : 30;
+    if (activityPercent < 0 || activityPercent > 75) {
+      return sendError(res, 'Activity budget percentage must be between 0 and 75', 400);
+    }
+
     const trip = await prisma.trip.create({
       data: {
         source,
@@ -41,6 +47,7 @@ exports.createTrip = async (req, res, next) => {
         startDate: new Date(startDate),
         endDate: new Date(endDate),
         budget: parseInt(budget),
+        activityBudgetPercent: activityPercent,
         travelers: travelers ? parseInt(travelers) : 1,
         createdById: req.user.id,
         status: 'PLANNED'
@@ -318,5 +325,6 @@ exports.getTripStats = async (req, res, next) => {
     next(error);
   }
 };
+
 
 

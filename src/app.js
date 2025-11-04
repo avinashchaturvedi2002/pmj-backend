@@ -52,6 +52,7 @@ app.use('/api/buses', require('./routes/bus.routes'));
 app.use('/api/hotels', require('./routes/hotel.routes'));
 app.use('/api/bookings', require('./routes/booking.routes'));
 app.use('/api/packages', require('./routes/package.routes'));
+app.use('/api/payments', require('./routes/payment.routes'));
 app.use('/api/analytics', require('./routes/analytics.routes'));
 app.use('/api/admin', require('./routes/admin.routes'));
 

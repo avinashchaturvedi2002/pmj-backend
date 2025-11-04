@@ -32,3 +32,4 @@ router.get('/users/registrations', adminOnly, getRegistrationCount);
 module.exports = router;
 
 
+

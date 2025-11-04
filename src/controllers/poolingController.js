@@ -499,4 +499,332 @@ exports.getMyPoolGroups = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc    Set package and per-person cost for group (Admin/Creator only)
+ * @route   POST /api/pooling/:groupId/set-package
+ * @access  Private (Admin or Group Creator)
+ */
+exports.setGroupPackage = async (req, res, next) => {
+  try {
+    const { groupId } = req.params;
+    const { packageId, perPersonCost, paymentDeadline } = req.body;
+
+    if (!packageId || !perPersonCost) {
+      return sendError(res, 'Please provide package ID and per-person cost', 400);
+    }
+
+    // Get pool group
+    const poolGroup = await prisma.poolGroup.findUnique({
+      where: { id: groupId },
+      include: {
+        members: true
+      }
+    });
+
+    if (!poolGroup) {
+      return sendError(res, 'Pool group not found', 404);
+    }
+
+    // Check if user is admin or group creator
+    if (req.user.role !== 'ADMIN' && poolGroup.createdById !== req.user.id) {
+      return sendError(res, 'Only admin or group creator can set package', 403);
+    }
+
+    // Validate package exists
+    const packageExists = await prisma.package.findUnique({
+      where: { id: packageId }
+    });
+
+    if (!packageExists) {
+      return sendError(res, 'Package not found', 404);
+    }
+
+    // Update pool group
+    const updatedGroup = await prisma.poolGroup.update({
+      where: { id: groupId },
+      data: {
+        selectedPackageId: packageId,
+        perPersonCost: parseInt(perPersonCost),
+        paymentDeadline: paymentDeadline ? new Date(paymentDeadline) : null,
+        packageApprovedBy: '[]' // Reset approvals when new package is set
+      },
+      include: {
+        selectedPackage: {
+          include: {
+            bus: true,
+            hotel: true
+          }
+        },
+        trip: true,
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    sendSuccess(res, { poolGroup: updatedGroup }, 'Package set successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Member approves selected package
+ * @route   POST /api/pooling/:groupId/approve-package
+ * @access  Private
+ */
+exports.approvePackage = async (req, res, next) => {
+  try {
+    const { groupId } = req.params;
+
+    // Get pool group
+    const poolGroup = await prisma.poolGroup.findUnique({
+      where: { id: groupId },
+      include: {
+        members: true
+      }
+    });
+
+    if (!poolGroup) {
+      return sendError(res, 'Pool group not found', 404);
+    }
+
+    if (!poolGroup.selectedPackageId) {
+      return sendError(res, 'No package selected for this group', 400);
+    }
+
+    // Check if user is a member
+    const member = poolGroup.members.find(m => m.userId === req.user.id);
+    if (!member) {
+      return sendError(res, 'You are not a member of this group', 400);
+    }
+
+    if (member.status !== 'APPROVED') {
+      return sendError(res, 'Only approved members can approve packages', 400);
+    }
+
+    // Parse existing approvals
+    let approvedBy = [];
+    try {
+      approvedBy = JSON.parse(poolGroup.packageApprovedBy || '[]');
+    } catch (e) {
+      approvedBy = [];
+    }
+
+    // Add user if not already approved
+    if (!approvedBy.includes(req.user.id)) {
+      approvedBy.push(req.user.id);
+    }
+
+    // Update pool group
+    const updatedGroup = await prisma.poolGroup.update({
+      where: { id: groupId },
+      data: {
+        packageApprovedBy: JSON.stringify(approvedBy)
+      },
+      include: {
+        selectedPackage: {
+          include: {
+            bus: true,
+            hotel: true
+          }
+        },
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    sendSuccess(res, {
+      poolGroup: updatedGroup,
+      approvedCount: approvedBy.length,
+      totalApproved: approvedBy.length,
+      totalMembers: poolGroup.members.filter(m => m.status === 'APPROVED').length
+    }, 'Package approved successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Check group payment status
+ * @route   GET /api/pooling/:groupId/payment-status
+ * @access  Private
+ */
+exports.checkGroupPaymentStatus = async (req, res, next) => {
+  try {
+    const { groupId } = req.params;
+
+    const poolGroup = await prisma.poolGroup.findUnique({
+      where: { id: groupId },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!poolGroup) {
+      return sendError(res, 'Pool group not found', 404);
+    }
+
+    const approvedMembers = poolGroup.members.filter(m => m.status === 'APPROVED' || m.status === 'PAID');
+    const paidMembers = poolGroup.members.filter(m => m.status === 'PAID');
+    const pendingMembers = poolGroup.members.filter(m => m.status === 'APPROVED');
+    const failedMembers = poolGroup.members.filter(m => m.status === 'PAYMENT_FAILED');
+
+    const allPaid = approvedMembers.length > 0 && approvedMembers.length === paidMembers.length;
+
+    sendSuccess(res, {
+      groupId: poolGroup.id,
+      status: poolGroup.status,
+      perPersonCost: poolGroup.perPersonCost,
+      paymentDeadline: poolGroup.paymentDeadline,
+      members: poolGroup.members.map(m => ({
+        id: m.id,
+        user: m.user,
+        status: m.status,
+        paymentStatus: m.paymentStatus,
+        amountPaid: m.amountPaid,
+        paidAt: m.paidAt
+      })),
+      summary: {
+        totalMembers: approvedMembers.length,
+        paidMembers: paidMembers.length,
+        pendingMembers: pendingMembers.length,
+        failedMembers: failedMembers.length,
+        allPaid,
+        totalCollected: paidMembers.reduce((sum, m) => sum + (m.amountPaid || 0), 0)
+      }
+    }, 'Payment status retrieved successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Lock group after all payments (Admin/Creator only)
+ * @route   POST /api/pooling/:groupId/lock
+ * @access  Private (Admin or Group Creator)
+ */
+exports.lockGroup = async (req, res, next) => {
+  try {
+    const { groupId } = req.params;
+
+    const poolGroup = await prisma.poolGroup.findUnique({
+      where: { id: groupId },
+      include: {
+        members: true,
+        selectedPackage: {
+          include: {
+            bus: true,
+            hotel: true
+          }
+        },
+        trip: true
+      }
+    });
+
+    if (!poolGroup) {
+      return sendError(res, 'Pool group not found', 404);
+    }
+
+    // Check if user is admin or group creator
+    if (req.user.role !== 'ADMIN' && poolGroup.createdById !== req.user.id) {
+      return sendError(res, 'Only admin or group creator can lock group', 403);
+    }
+
+    // Verify all approved members have paid
+    const approvedMembers = poolGroup.members.filter(m => m.status === 'APPROVED' || m.status === 'PAID');
+    const paidMembers = poolGroup.members.filter(m => m.status === 'PAID');
+
+    if (approvedMembers.length === 0) {
+      return sendError(res, 'No approved members in group', 400);
+    }
+
+    if (approvedMembers.length !== paidMembers.length) {
+      return sendError(res, 'Not all members have paid', 400);
+    }
+
+    if (!poolGroup.selectedPackageId) {
+      return sendError(res, 'No package selected for this group', 400);
+    }
+
+    // Lock group and create bookings atomically
+    await prisma.$transaction(async (tx) => {
+      // Update group status to LOCKED
+      await tx.poolGroup.update({
+        where: { id: groupId },
+        data: { status: 'LOCKED' }
+      });
+
+      // Create bookings for all paid members
+      // Note: This is a simplified version - in production, you'd need to handle
+      // actual seat/room allocation based on the package
+      for (const member of paidMembers) {
+        await tx.booking.create({
+          data: {
+            userId: member.userId,
+            tripId: poolGroup.tripId,
+            totalPrice: member.amountPaid || poolGroup.perPersonCost || 0,
+            status: 'CONFIRMED'
+          }
+        });
+      }
+    });
+
+    const updatedGroup = await prisma.poolGroup.findUnique({
+      where: { id: groupId },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true
+              }
+            }
+          }
+        },
+        selectedPackage: {
+          include: {
+            bus: true,
+            hotel: true
+          }
+        }
+      }
+    });
+
+    sendSuccess(res, { poolGroup: updatedGroup }, 'Group locked and bookings created successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
+
 

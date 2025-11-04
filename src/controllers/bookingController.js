@@ -192,15 +192,22 @@ exports.getAllBookings = async (req, res, next) => {
         where,
         include: {
           trip: true,
-          busSeat: {
+          package: true,
+          busBookings: {
             include: {
               bus: true
             }
           },
-          hotelRoom: {
+          hotelBookings: {
             include: {
               hotel: true
             }
+          },
+          payments: {
+            orderBy: {
+              createdAt: 'desc'
+            },
+            take: 1
           }
         },
         skip: (page - 1) * limit,
@@ -391,5 +398,6 @@ exports.confirmBooking = async (req, res, next) => {
     next(error);
   }
 };
+
 
 

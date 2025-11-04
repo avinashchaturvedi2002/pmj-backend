@@ -8,7 +8,11 @@ const {
   updateMemberStatus,
   leavePoolGroup,
   deletePoolGroup,
-  getMyPoolGroups
+  getMyPoolGroups,
+  setGroupPackage,
+  approvePackage,
+  checkGroupPaymentStatus,
+  lockGroup
 } = require('../controllers/poolingController');
 const { protect } = require('../middleware/auth');
 
@@ -34,6 +38,15 @@ router.delete('/:groupId/leave', leavePoolGroup);
 // Approve/Reject member (Admin or Creator)
 router.patch('/:groupId/members/:memberId', updateMemberStatus);
 
+// Package selection and approval
+router.post('/:groupId/set-package', setGroupPackage);
+router.post('/:groupId/approve-package', approvePackage);
+
+// Payment status and group locking
+router.get('/:groupId/payment-status', checkGroupPaymentStatus);
+router.post('/:groupId/lock', lockGroup);
+
 module.exports = router;
+
 
 

@@ -25,3 +25,4 @@ router.patch('/:id/confirm', adminOnly, confirmBooking);
 module.exports = router;
 
 
+

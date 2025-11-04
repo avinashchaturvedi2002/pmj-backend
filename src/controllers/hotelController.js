@@ -256,3 +256,4 @@ exports.deleteHotel = async (req, res, next) => {
 };
 
 
+
