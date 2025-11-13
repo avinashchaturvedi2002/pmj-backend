@@ -15,6 +15,11 @@ const {
   lockGroup,
   enforcePaymentDeadline
 } = require('../controllers/poolingController');
+const {
+  getOrCreateGroupChat,
+  getMessages,
+  sendMessage
+} = require('../controllers/groupChatController');
 const { protect } = require('../middleware/auth');
 
 // All routes are protected
@@ -47,6 +52,11 @@ router.post('/:groupId/approve-package', approvePackage);
 router.get('/:groupId/payment-status', checkGroupPaymentStatus);
 router.post('/:groupId/lock', lockGroup);
 router.post('/:groupId/enforce-deadline', enforcePaymentDeadline);
+
+// Group chat routes
+router.get('/:groupId/chat', getOrCreateGroupChat);
+router.get('/:groupId/chat/messages', getMessages);
+router.post('/:groupId/chat/messages', sendMessage);
 
 module.exports = router;
 

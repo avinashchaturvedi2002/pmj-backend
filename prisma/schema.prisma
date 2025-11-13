@@ -31,6 +31,7 @@ model User {
   payments          Payment[]
   seatReservations  BusSeatReservation[]
   roomAllocations   HotelRoomAllocation[]
+  groupMessages     GroupMessage[]
 
   @@map("users")
 }
@@ -106,6 +107,7 @@ model PoolGroup {
   members         GroupMember[]
   packages        Package[]     @relation("GroupPackages")
   payments        Payment[]
+  chat            GroupChat?
 
   @@index([tripId])
   @@index([createdById])
@@ -522,4 +524,40 @@ model HotelBooking {
   @@index([checkOut])
   @@index([hotelId, checkIn, checkOut])
   @@map("hotel_bookings")
+}
+
+// ============================================
+// GROUP CHAT
+// ============================================
+
+model GroupChat {
+  id        String   @id @default(cuid())
+  poolGroupId String @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  poolGroup PoolGroup    @relation(fields: [poolGroupId], references: [id], onDelete: Cascade)
+  messages GroupMessage[]
+
+  @@index([poolGroupId])
+  @@map("group_chats")
+}
+
+model GroupMessage {
+  id        String   @id @default(cuid())
+  chatId    String
+  senderId  String
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  chat   GroupChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender User      @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@index([chatId, createdAt])
+  @@index([senderId])
+  @@map("group_messages")
 }
