@@ -1,23 +1,24 @@
-/**
- * Validate email format
- */
+
+// const isValidEmail = (email) => {
+//   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+//   return emailRegex.test(email);
+// };
+
+
+
 const isValidEmail = (email) => {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+ 
+  const emailRegex = /^[^\s@]+@[A-Za-z][^\s@]*\.[^\s@]+$/;
   return emailRegex.test(email);
 };
 
-/**
- * Validate password strength
- * At least 8 characters, 1 uppercase, 1 lowercase, 1 number
- */
+
 const isValidPassword = (password) => {
   const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
   return passwordRegex.test(password);
 };
 
-/**
- * Validate date format (YYYY-MM-DD or ISO string)
- */
+
 const isValidDate = (date) => {
   const parsedDate = new Date(date);
   return !isNaN(parsedDate.getTime());

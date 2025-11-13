@@ -12,7 +12,8 @@ const {
   setGroupPackage,
   approvePackage,
   checkGroupPaymentStatus,
-  lockGroup
+  lockGroup,
+  enforcePaymentDeadline
 } = require('../controllers/poolingController');
 const { protect } = require('../middleware/auth');
 
@@ -45,6 +46,7 @@ router.post('/:groupId/approve-package', approvePackage);
 // Payment status and group locking
 router.get('/:groupId/payment-status', checkGroupPaymentStatus);
 router.post('/:groupId/lock', lockGroup);
+router.post('/:groupId/enforce-deadline', enforcePaymentDeadline);
 
 module.exports = router;
 

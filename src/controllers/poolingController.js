@@ -4,11 +4,6 @@ const { validatePagination } = require('../utils/validation');
 
 const prisma = new PrismaClient();
 
-/**
- * @desc    Create new pool group
- * @route   POST /api/pooling
- * @access  Private
- */
 exports.createPoolGroup = async (req, res, next) => {
   try {
     const { tripId, groupSize, description } = req.body;
@@ -21,7 +16,6 @@ exports.createPoolGroup = async (req, res, next) => {
       return sendError(res, 'Group size must be at least 2', 400);
     }
 
-    // Check if trip exists and user owns it
     const trip = await prisma.trip.findUnique({
       where: { id: tripId }
     });
@@ -34,7 +28,6 @@ exports.createPoolGroup = async (req, res, next) => {
       return sendError(res, 'You can only create pool groups for your own trips', 403);
     }
 
-    // Create pool group
     const poolGroup = await prisma.poolGroup.create({
       data: {
         tripId,
@@ -56,7 +49,6 @@ exports.createPoolGroup = async (req, res, next) => {
       }
     });
 
-    // Auto-add creator as first member with APPROVED status
     await prisma.groupMember.create({
       data: {
         poolGroupId: poolGroup.id,
@@ -71,11 +63,6 @@ exports.createPoolGroup = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Get all pool groups (with filters)
- * @route   GET /api/pooling
- * @access  Private
- */
 exports.getAllPoolGroups = async (req, res, next) => {
   try {
     const { page, limit } = validatePagination(req.query.page, req.query.limit);
@@ -83,7 +70,6 @@ exports.getAllPoolGroups = async (req, res, next) => {
 
     const where = {};
 
-    // Filter by destination (through trip)
     if (destination) {
       where.trip = {
         destination: {
@@ -96,7 +82,6 @@ exports.getAllPoolGroups = async (req, res, next) => {
     if (status) {
       where.status = status;
     } else {
-      // By default, show only OPEN groups
       where.status = 'OPEN';
     }
 
@@ -119,7 +104,12 @@ exports.getAllPoolGroups = async (req, res, next) => {
             }
           },
           members: {
-            where: { status: 'APPROVED' },
+            where: {
+              OR: [
+                { status: 'APPROVED' },
+                { userId: req.user.id }
+              ]
+            },
             include: {
               user: {
                 select: {
@@ -147,11 +137,6 @@ exports.getAllPoolGroups = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Get single pool group by ID
- * @route   GET /api/pooling/:id
- * @access  Private
- */
 exports.getPoolGroupById = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -193,17 +178,27 @@ exports.getPoolGroupById = async (req, res, next) => {
       return sendError(res, 'Pool group not found', 404);
     }
 
+    const approvedMembersCount = poolGroup.members.filter(m => m.status === 'APPROVED').length;
+    
+    if (poolGroup.currentSize !== approvedMembersCount) {
+      await prisma.poolGroup.update({
+        where: { id },
+        data: {
+          currentSize: approvedMembersCount,
+          status: approvedMembersCount >= poolGroup.groupSize ? 'CLOSED' : poolGroup.status
+        }
+      });
+      
+      poolGroup.currentSize = approvedMembersCount;
+      poolGroup.status = approvedMembersCount >= poolGroup.groupSize ? 'CLOSED' : poolGroup.status;
+    }
+
     sendSuccess(res, { poolGroup }, 'Pool group retrieved successfully');
   } catch (error) {
     next(error);
   }
 };
 
-/**
- * @desc    Join pool group (send request)
- * @route   POST /api/pooling/:id/join
- * @access  Private
- */
 exports.joinPoolGroup = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -223,19 +218,16 @@ exports.joinPoolGroup = async (req, res, next) => {
       return sendError(res, 'This pool group is not accepting new members', 400);
     }
 
-    // Check if user is already a member
     const existingMember = poolGroup.members.find(m => m.userId === req.user.id);
     if (existingMember) {
       return sendError(res, `You have already ${existingMember.status.toLowerCase()} this group`, 400);
     }
 
-    // Check if group is full (counting only APPROVED members)
     const approvedCount = poolGroup.members.filter(m => m.status === 'APPROVED').length;
     if (approvedCount >= poolGroup.groupSize) {
       return sendError(res, 'This pool group is full', 400);
     }
 
-    // Create join request
     const member = await prisma.groupMember.create({
       data: {
         poolGroupId: id,
@@ -259,21 +251,15 @@ exports.joinPoolGroup = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Approve/Reject join request (Admin/Creator only)
- * @route   PATCH /api/pooling/:groupId/members/:memberId
- * @access  Private (Admin or Group Creator)
- */
 exports.updateMemberStatus = async (req, res, next) => {
   try {
     const { groupId, memberId } = req.params;
-    const { status } = req.body; // APPROVED or REJECTED
+    const { status } = req.body;
 
     if (!['APPROVED', 'REJECTED'].includes(status)) {
       return sendError(res, 'Invalid status. Must be APPROVED or REJECTED', 400);
     }
 
-    // Get pool group
     const poolGroup = await prisma.poolGroup.findUnique({
       where: { id: groupId },
       include: {
@@ -285,12 +271,10 @@ exports.updateMemberStatus = async (req, res, next) => {
       return sendError(res, 'Pool group not found', 404);
     }
 
-    // Check if user is admin or group creator
     if (req.user.role !== 'ADMIN' && poolGroup.createdById !== req.user.id) {
       return sendError(res, 'Only admin or group creator can approve/reject requests', 403);
     }
 
-    // Get member
     const member = poolGroup.members.find(m => m.id === memberId);
     if (!member) {
       return sendError(res, 'Member not found in this group', 404);
@@ -300,7 +284,6 @@ exports.updateMemberStatus = async (req, res, next) => {
       return sendError(res, `Member request is already ${member.status.toLowerCase()}`, 400);
     }
 
-    // If approving, check if group is full
     if (status === 'APPROVED') {
       const approvedCount = poolGroup.members.filter(m => m.status === 'APPROVED').length;
       if (approvedCount >= poolGroup.groupSize) {
@@ -308,7 +291,6 @@ exports.updateMemberStatus = async (req, res, next) => {
       }
     }
 
-    // Update member status
     const updatedMember = await prisma.groupMember.update({
       where: { id: memberId },
       data: { status },
@@ -323,7 +305,6 @@ exports.updateMemberStatus = async (req, res, next) => {
       }
     });
 
-    // Update group current size and status if approved
     if (status === 'APPROVED') {
       const newApprovedCount = poolGroup.members.filter(m => 
         m.status === 'APPROVED' || m.id === memberId
@@ -344,11 +325,6 @@ exports.updateMemberStatus = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Leave pool group
- * @route   DELETE /api/pooling/:groupId/leave
- * @access  Private
- */
 exports.leavePoolGroup = async (req, res, next) => {
   try {
     const { groupId } = req.params;
@@ -361,12 +337,10 @@ exports.leavePoolGroup = async (req, res, next) => {
       return sendError(res, 'Pool group not found', 404);
     }
 
-    // Group creator cannot leave
     if (poolGroup.createdById === req.user.id) {
       return sendError(res, 'Group creator cannot leave. Please delete the group instead', 400);
     }
 
-    // Find member record
     const member = await prisma.groupMember.findFirst({
       where: {
         poolGroupId: groupId,
@@ -378,19 +352,17 @@ exports.leavePoolGroup = async (req, res, next) => {
       return sendError(res, 'You are not a member of this group', 400);
     }
 
-    // Update member status to CANCELLED
     await prisma.groupMember.update({
       where: { id: member.id },
       data: { status: 'CANCELLED' }
     });
 
-    // Update group size if member was approved
     if (member.status === 'APPROVED') {
       await prisma.poolGroup.update({
         where: { id: groupId },
         data: {
           currentSize: { decrement: 1 },
-          status: 'OPEN' // Reopen group when someone leaves
+          status: 'OPEN'
         }
       });
     }
@@ -401,11 +373,6 @@ exports.leavePoolGroup = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Delete pool group (Creator or Admin only)
- * @route   DELETE /api/pooling/:id
- * @access  Private (Creator or Admin)
- */
 exports.deletePoolGroup = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -418,7 +385,6 @@ exports.deletePoolGroup = async (req, res, next) => {
       return sendError(res, 'Pool group not found', 404);
     }
 
-    // Check ownership
     if (poolGroup.createdById !== req.user.id && req.user.role !== 'ADMIN') {
       return sendError(res, 'Access denied', 403);
     }
@@ -433,16 +399,10 @@ exports.deletePoolGroup = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Get my pool groups (created by me or joined)
- * @route   GET /api/pooling/my/groups
- * @access  Private
- */
 exports.getMyPoolGroups = async (req, res, next) => {
   try {
     const { page, limit } = validatePagination(req.query.page, req.query.limit);
 
-    // Get groups created by user or where user is a member
     const [poolGroups, total] = await Promise.all([
       prisma.poolGroup.findMany({
         where: {
@@ -499,11 +459,6 @@ exports.getMyPoolGroups = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Set package and per-person cost for group (Admin/Creator only)
- * @route   POST /api/pooling/:groupId/set-package
- * @access  Private (Admin or Group Creator)
- */
 exports.setGroupPackage = async (req, res, next) => {
   try {
     const { groupId } = req.params;
@@ -513,7 +468,6 @@ exports.setGroupPackage = async (req, res, next) => {
       return sendError(res, 'Please provide package ID and per-person cost', 400);
     }
 
-    // Get pool group
     const poolGroup = await prisma.poolGroup.findUnique({
       where: { id: groupId },
       include: {
@@ -525,12 +479,10 @@ exports.setGroupPackage = async (req, res, next) => {
       return sendError(res, 'Pool group not found', 404);
     }
 
-    // Check if user is admin or group creator
     if (req.user.role !== 'ADMIN' && poolGroup.createdById !== req.user.id) {
       return sendError(res, 'Only admin or group creator can set package', 403);
     }
 
-    // Validate package exists
     const packageExists = await prisma.package.findUnique({
       where: { id: packageId }
     });
@@ -539,53 +491,90 @@ exports.setGroupPackage = async (req, res, next) => {
       return sendError(res, 'Package not found', 404);
     }
 
-    // Update pool group
-    const updatedGroup = await prisma.poolGroup.update({
-      where: { id: groupId },
-      data: {
-        selectedPackageId: packageId,
-        perPersonCost: parseInt(perPersonCost),
-        paymentDeadline: paymentDeadline ? new Date(paymentDeadline) : null,
-        packageApprovedBy: '[]' // Reset approvals when new package is set
-      },
-      include: {
-        selectedPackage: {
-          include: {
-            bus: true,
-            hotel: true
-          }
+    const approvedMembers = poolGroup.members.filter((member) =>
+      ['APPROVED', 'PAYMENT_PENDING', 'PAID'].includes(member.status)
+    );
+
+    if (approvedMembers.length < poolGroup.groupSize) {
+      return sendError(res, 'Group is not full yet. Approve members before offering a package', 400);
+    }
+
+    const normalizedDeadline = paymentDeadline
+      ? new Date(paymentDeadline)
+      : new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    if (Number.isNaN(normalizedDeadline.getTime())) {
+      return sendError(res, 'Invalid payment deadline provided', 400);
+    }
+
+    if (normalizedDeadline <= new Date()) {
+      return sendError(res, 'Payment deadline must be in the future', 400);
+    }
+
+    const updatedGroup = await prisma.$transaction(async (tx) => {
+      await tx.poolGroup.update({
+        where: { id: groupId },
+        data: {
+          selectedPackageId: packageId,
+          perPersonCost: parseInt(perPersonCost, 10),
+          paymentDeadline: normalizedDeadline,
+          packageApprovedBy: '[]',
+          status: 'CLOSED',
+          currentSize: approvedMembers.length
+        }
+      });
+
+      await tx.groupMember.updateMany({
+        where: {
+          poolGroupId: groupId,
+          status: {
+            in: ['APPROVED', 'PAYMENT_PENDING']
+          },
+          paymentStatus: { not: 'SUCCESS' }
         },
-        trip: true,
-        members: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true
+        data: {
+          status: 'PAYMENT_PENDING',
+          paymentStatus: 'PENDING',
+          amountPaid: null,
+          paidAt: null
+        }
+      });
+
+      return tx.poolGroup.findUnique({
+        where: { id: groupId },
+        include: {
+          selectedPackage: {
+            include: {
+              bus: true,
+              hotel: true
+            }
+          },
+          trip: true,
+          members: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true
+                }
               }
             }
           }
         }
-      }
+      });
     });
 
-    sendSuccess(res, { poolGroup: updatedGroup }, 'Package set successfully');
+    sendSuccess(res, { poolGroup: updatedGroup }, 'Package set successfully. Members must complete payment before the deadline.');
   } catch (error) {
     next(error);
   }
 };
 
-/**
- * @desc    Member approves selected package
- * @route   POST /api/pooling/:groupId/approve-package
- * @access  Private
- */
 exports.approvePackage = async (req, res, next) => {
   try {
     const { groupId } = req.params;
 
-    // Get pool group
     const poolGroup = await prisma.poolGroup.findUnique({
       where: { id: groupId },
       include: {
@@ -601,17 +590,15 @@ exports.approvePackage = async (req, res, next) => {
       return sendError(res, 'No package selected for this group', 400);
     }
 
-    // Check if user is a member
     const member = poolGroup.members.find(m => m.userId === req.user.id);
     if (!member) {
       return sendError(res, 'You are not a member of this group', 400);
     }
 
-    if (member.status !== 'APPROVED') {
+    if (!['APPROVED', 'PAYMENT_PENDING', 'PAID'].includes(member.status)) {
       return sendError(res, 'Only approved members can approve packages', 400);
     }
 
-    // Parse existing approvals
     let approvedBy = [];
     try {
       approvedBy = JSON.parse(poolGroup.packageApprovedBy || '[]');
@@ -619,12 +606,10 @@ exports.approvePackage = async (req, res, next) => {
       approvedBy = [];
     }
 
-    // Add user if not already approved
     if (!approvedBy.includes(req.user.id)) {
       approvedBy.push(req.user.id);
     }
 
-    // Update pool group
     const updatedGroup = await prisma.poolGroup.update({
       where: { id: groupId },
       data: {
@@ -655,18 +640,15 @@ exports.approvePackage = async (req, res, next) => {
       poolGroup: updatedGroup,
       approvedCount: approvedBy.length,
       totalApproved: approvedBy.length,
-      totalMembers: poolGroup.members.filter(m => m.status === 'APPROVED').length
+      totalMembers: poolGroup.members.filter(m =>
+        ['APPROVED', 'PAYMENT_PENDING', 'PAID'].includes(m.status)
+      ).length
     }, 'Package approved successfully');
   } catch (error) {
     next(error);
   }
 };
 
-/**
- * @desc    Check group payment status
- * @route   GET /api/pooling/:groupId/payment-status
- * @access  Private
- */
 exports.checkGroupPaymentStatus = async (req, res, next) => {
   try {
     const { groupId } = req.params;
@@ -692,12 +674,14 @@ exports.checkGroupPaymentStatus = async (req, res, next) => {
       return sendError(res, 'Pool group not found', 404);
     }
 
-    const approvedMembers = poolGroup.members.filter(m => m.status === 'APPROVED' || m.status === 'PAID');
+    const activeMembers = poolGroup.members.filter((m) =>
+      ['APPROVED', 'PAYMENT_PENDING', 'PAID'].includes(m.status)
+    );
     const paidMembers = poolGroup.members.filter(m => m.status === 'PAID');
-    const pendingMembers = poolGroup.members.filter(m => m.status === 'APPROVED');
+    const pendingMembers = poolGroup.members.filter(m => ['APPROVED', 'PAYMENT_PENDING'].includes(m.status));
     const failedMembers = poolGroup.members.filter(m => m.status === 'PAYMENT_FAILED');
 
-    const allPaid = approvedMembers.length > 0 && approvedMembers.length === paidMembers.length;
+    const allPaid = activeMembers.length > 0 && activeMembers.length === paidMembers.length;
 
     sendSuccess(res, {
       groupId: poolGroup.id,
@@ -713,7 +697,7 @@ exports.checkGroupPaymentStatus = async (req, res, next) => {
         paidAt: m.paidAt
       })),
       summary: {
-        totalMembers: approvedMembers.length,
+        totalMembers: activeMembers.length,
         paidMembers: paidMembers.length,
         pendingMembers: pendingMembers.length,
         failedMembers: failedMembers.length,
@@ -726,11 +710,104 @@ exports.checkGroupPaymentStatus = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Lock group after all payments (Admin/Creator only)
- * @route   POST /api/pooling/:groupId/lock
- * @access  Private (Admin or Group Creator)
- */
+exports.enforcePaymentDeadline = async (req, res, next) => {
+  try {
+    const { groupId } = req.params;
+
+    const poolGroup = await prisma.poolGroup.findUnique({
+      where: { id: groupId },
+      include: {
+        members: true,
+        selectedPackage: true
+      }
+    });
+
+    if (!poolGroup) {
+      return sendError(res, 'Pool group not found', 404);
+    }
+
+    if (!poolGroup.paymentDeadline) {
+      return sendError(res, 'No payment deadline set for this group', 400);
+    }
+
+    if (req.user.role !== 'ADMIN' && poolGroup.createdById !== req.user.id) {
+      return sendError(res, 'Only admin or group creator can enforce payment deadlines', 403);
+    }
+
+    const now = new Date();
+    if (poolGroup.paymentDeadline > now) {
+      return sendError(res, 'Payment deadline has not passed yet', 400);
+    }
+
+    const overdueMembers = poolGroup.members.filter((member) =>
+      ['APPROVED', 'PAYMENT_PENDING', 'PAYMENT_FAILED'].includes(member.status)
+    );
+
+    if (overdueMembers.length === 0) {
+      return sendSuccess(res, { poolGroupId: poolGroup.id, removedMembers: [] }, 'No overdue members to remove');
+    }
+
+    await prisma.$transaction(async (tx) => {
+      for (const member of overdueMembers) {
+        await tx.groupMember.update({
+          where: { id: member.id },
+          data: {
+            status: 'CANCELLED',
+            paymentStatus: 'FAILED',
+            amountPaid: null,
+            paidAt: null
+          }
+        });
+      }
+
+      const activeCount = await tx.groupMember.count({
+        where: {
+          poolGroupId: groupId,
+          status: { in: ['APPROVED', 'PAYMENT_PENDING', 'PAID'] }
+        }
+      });
+
+      await tx.poolGroup.update({
+        where: { id: groupId },
+        data: {
+          currentSize: activeCount,
+          status: activeCount < poolGroup.groupSize ? 'OPEN' : poolGroup.status
+        }
+      });
+    });
+
+    const refreshedGroup = await prisma.poolGroup.findUnique({
+      where: { id: groupId },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true
+              }
+            }
+          }
+        },
+        selectedPackage: {
+          include: {
+            bus: true,
+            hotel: true
+          }
+        }
+      }
+    });
+
+    sendSuccess(res, {
+      poolGroup: refreshedGroup,
+      removedMembers: overdueMembers.map((member) => member.id)
+    }, 'Removed members who missed the payment deadline');
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.lockGroup = async (req, res, next) => {
   try {
     const { groupId } = req.params;
@@ -753,13 +830,13 @@ exports.lockGroup = async (req, res, next) => {
       return sendError(res, 'Pool group not found', 404);
     }
 
-    // Check if user is admin or group creator
     if (req.user.role !== 'ADMIN' && poolGroup.createdById !== req.user.id) {
       return sendError(res, 'Only admin or group creator can lock group', 403);
     }
 
-    // Verify all approved members have paid
-    const approvedMembers = poolGroup.members.filter(m => m.status === 'APPROVED' || m.status === 'PAID');
+    const approvedMembers = poolGroup.members.filter(m =>
+      ['APPROVED', 'PAYMENT_PENDING', 'PAID'].includes(m.status)
+    );
     const paidMembers = poolGroup.members.filter(m => m.status === 'PAID');
 
     if (approvedMembers.length === 0) {
@@ -774,17 +851,12 @@ exports.lockGroup = async (req, res, next) => {
       return sendError(res, 'No package selected for this group', 400);
     }
 
-    // Lock group and create bookings atomically
     await prisma.$transaction(async (tx) => {
-      // Update group status to LOCKED
       await tx.poolGroup.update({
         where: { id: groupId },
         data: { status: 'LOCKED' }
       });
 
-      // Create bookings for all paid members
-      // Note: This is a simplified version - in production, you'd need to handle
-      // actual seat/room allocation based on the package
       for (const member of paidMembers) {
         await tx.booking.create({
           data: {

@@ -4,6 +4,10 @@ const {
   getAllBuses,
   getBusById,
   getAvailableSeats,
+  getSeatMap,
+  holdSeats,
+  releaseSeats,
+  confirmSeats,
   createBus,
   updateBus,
   deleteBus
@@ -16,6 +20,10 @@ router.use(protect);
 router.get('/', getAllBuses);
 router.get('/:id', getBusById);
 router.get('/:id/seats/available', getAvailableSeats);
+router.get('/:id/seats', getSeatMap);
+router.post('/:id/hold', holdSeats);
+router.delete('/:id/hold/:holdToken', releaseSeats);
+router.post('/:id/confirm', confirmSeats);
 
 // Admin only routes
 router.post('/', adminOnly, createBus);

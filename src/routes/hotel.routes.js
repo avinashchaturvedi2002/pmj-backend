@@ -4,6 +4,10 @@ const {
   getAllHotels,
   getHotelById,
   getAvailableRooms,
+  getRoomAvailability,
+  holdRooms,
+  releaseRooms,
+  confirmRooms,
   createHotel,
   updateHotel,
   deleteHotel
@@ -16,6 +20,10 @@ router.use(protect);
 router.get('/', getAllHotels);
 router.get('/:id', getHotelById);
 router.get('/:id/rooms/available', getAvailableRooms);
+router.get('/:id/rooms', getRoomAvailability);
+router.post('/:id/hold', holdRooms);
+router.delete('/:id/hold/:holdToken', releaseRooms);
+router.post('/:id/confirm', confirmRooms);
 
 // Admin only routes
 router.post('/', adminOnly, createHotel);

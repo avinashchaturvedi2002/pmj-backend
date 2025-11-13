@@ -6,11 +6,7 @@ const { isValidEmail, isValidPassword } = require('../utils/validation');
 
 const prisma = new PrismaClient();
 
-/**
- * @desc    Register new user
- * @route   POST /api/auth/register
- * @access  Public
- */
+
 exports.register = async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
@@ -114,11 +110,7 @@ exports.login = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Get current logged in user
- * @route   GET /api/auth/me
- * @access  Private
- */
+
 exports.getMe = async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({
@@ -145,11 +137,7 @@ exports.getMe = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Update user profile
- * @route   PUT /api/auth/profile
- * @access  Private
- */
+
 exports.updateProfile = async (req, res, next) => {
   try {
     const { name, email } = req.body;
@@ -184,11 +172,7 @@ exports.updateProfile = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Change password
- * @route   PUT /api/auth/password
- * @access  Private
- */
+
 exports.changePassword = async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -228,11 +212,7 @@ exports.changePassword = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Logout user
- * @route   POST /api/auth/logout
- * @access  Public
- */
+
 exports.logout = async (req, res) => {
   sendSuccess(res, {}, 'Logout successful');
 };

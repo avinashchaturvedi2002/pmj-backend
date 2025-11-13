@@ -24,11 +24,13 @@ model User {
   updatedAt DateTime @updatedAt
 
   // Relations
-  trips          Trip[]
-  poolGroups     PoolGroup[]
-  groupMembers   GroupMember[]
-  bookings       Booking[]
-  payments       Payment[]
+  trips             Trip[]
+  poolGroups        PoolGroup[]
+  groupMembers      GroupMember[]
+  bookings          Booking[]
+  payments          Payment[]
+  seatReservations  BusSeatReservation[]
+  roomAllocations   HotelRoomAllocation[]
 
   @@map("users")
 }
@@ -57,11 +59,13 @@ model Trip {
   updatedAt             DateTime @updatedAt
 
   // Relations
-  createdBy   User        @relation(fields: [createdById], references: [id], onDelete: Cascade)
-  poolGroups  PoolGroup[]
-  bookings    Booking[]
-  packages    Package[]
-  payments    Payment[]
+  createdBy        User                 @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  poolGroups       PoolGroup[]
+  bookings         Booking[]
+  packages         Package[]
+  payments         Payment[]
+  seatReservations BusSeatReservation[]
+  roomAllocations  HotelRoomAllocation[]
 
   @@index([createdById])
   @@index([destination])
@@ -166,24 +170,30 @@ model Bus {
   updatedAt    DateTime @updatedAt
 
   // Relations
-  seats       BusSeat[]
-  packages    Package[]
-  busBookings BusBooking[]
-  payments    Payment[]
+  seats            BusSeat[]
+  packages         Package[]
+  busBookings      BusBooking[]
+  payments         Payment[]
+  seatReservations BusSeatReservation[]
 
   @@map("buses")
 }
 
 model BusSeat {
-  id         String   @id @default(cuid())
-  busId      String
-  seatNumber String
-  isBooked   Boolean  @default(false)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id          String   @id @default(cuid())
+  busId       String
+  seatNumber  String
+  isBooked    Boolean  @default(false)
+  deck        String?  // upper, lower, single, etc.
+  rowIndex    Int?
+  columnIndex Int?
+  seatType    SeatType @default(STANDARD)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   // Relations
-  bus Bus @relation(fields: [busId], references: [id], onDelete: Cascade)
+  bus          Bus                  @relation(fields: [busId], references: [id], onDelete: Cascade)
+  reservations BusSeatReservation[] @relation("BusSeatReservations")
 
   @@unique([busId, seatNumber])
   @@index([busId])
@@ -208,10 +218,11 @@ model Hotel {
   updatedAt    DateTime @updatedAt
 
   // Relations
-  rooms         HotelRoom[]
-  packages      Package[]
-  hotelBookings HotelBooking[]
-  payments      Payment[]
+  rooms           HotelRoom[]
+  packages        Package[]
+  hotelBookings   HotelBooking[]
+  payments        Payment[]
+  roomAllocations HotelRoomAllocation[]
 
   @@index([location])
   @@map("hotels")
@@ -223,16 +234,84 @@ model HotelRoom {
   roomNumber String
   roomType   String   @default("Standard") // Standard, Deluxe, Suite
   isBooked   Boolean  @default(false)
+  floor      Int?
+  capacity   Int?     @default(2)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   // Relations
-  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  hotel       Hotel                 @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  allocations HotelRoomAllocation[] @relation("HotelRoomAllocations")
 
   @@unique([hotelId, roomNumber])
   @@index([hotelId])
   @@index([isBooked])
   @@map("hotel_rooms")
+}
+
+model BusSeatReservation {
+  id            String                 @id @default(cuid())
+  busId         String
+  busSeatId     String?
+  tripId        String
+  journeyDate   DateTime               @db.Date
+  seatNumber    String
+  status        SeatReservationStatus  @default(HELD)
+  holdToken     String?
+  holdExpiresAt DateTime?
+  bookingId     String?
+  paymentId     String?
+  userId        String
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+
+  bus       Bus        @relation(fields: [busId], references: [id], onDelete: Cascade)
+  busSeat   BusSeat?   @relation("BusSeatReservations", fields: [busSeatId], references: [id], onDelete: SetNull)
+  trip      Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  booking   Booking?   @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  payment   Payment?   @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([busId, journeyDate, seatNumber], map: "ux_bus_seat_journey")
+  @@index([busId, journeyDate])
+  @@index([tripId])
+  @@index([bookingId])
+  @@index([paymentId])
+  @@index([holdExpiresAt])
+  @@map("bus_seat_reservations")
+}
+
+model HotelRoomAllocation {
+  id            String                @id @default(cuid())
+  hotelId       String
+  hotelRoomId   String?
+  tripId        String
+  roomNumber    String
+  checkIn       DateTime              @db.Date
+  checkOut      DateTime              @db.Date
+  status        RoomAllocationStatus  @default(HELD)
+  holdToken     String?
+  holdExpiresAt DateTime?
+  bookingId     String?
+  paymentId     String?
+  userId        String
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  hotel     Hotel       @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  hotelRoom HotelRoom?  @relation("HotelRoomAllocations", fields: [hotelRoomId], references: [id], onDelete: SetNull)
+  trip      Trip        @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  booking   Booking?    @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  payment   Payment?    @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([hotelId, roomNumber, checkIn], map: "ux_hotel_room_checkin")
+  @@index([hotelId, checkIn, checkOut])
+  @@index([tripId])
+  @@index([bookingId])
+  @@index([paymentId])
+  @@index([holdExpiresAt])
+  @@map("hotel_room_allocations")
 }
 
 // ============================================
@@ -256,6 +335,8 @@ model Booking {
   payments      Payment[]
   busBookings   BusBooking[]   // Multiple bus bookings (outbound + return)
   hotelBookings HotelBooking[] // Hotel bookings
+  seatReservations BusSeatReservation[]
+  roomAllocations  HotelRoomAllocation[]
 
   @@index([userId])
   @@index([tripId])
@@ -331,18 +412,22 @@ model Payment {
   status              PaymentStatus @default(PENDING)
   paymentMethod       String?       // card, upi, netbanking, etc.
   failureReason       String?       @db.Text
+  itinerary           String?       @db.Text
+  itineraryGeneratedAt DateTime?
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
 
   // Relations
-  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  booking     Booking?     @relation(fields: [bookingId], references: [id], onDelete: SetNull)
-  poolGroup   PoolGroup?   @relation(fields: [poolGroupId], references: [id], onDelete: SetNull)
-  groupMember GroupMember? @relation(fields: [groupMemberId], references: [id], onDelete: SetNull)
-  trip        Trip?        @relation(fields: [tripId], references: [id], onDelete: SetNull)
-  package     Package?     @relation(fields: [packageId], references: [id], onDelete: SetNull)
-  bus         Bus?         @relation(fields: [busId], references: [id], onDelete: SetNull)
-  hotel       Hotel?       @relation(fields: [hotelId], references: [id], onDelete: SetNull)
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking          Booking?            @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  poolGroup        PoolGroup?          @relation(fields: [poolGroupId], references: [id], onDelete: SetNull)
+  groupMember      GroupMember?        @relation(fields: [groupMemberId], references: [id], onDelete: SetNull)
+  trip             Trip?               @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  package          Package?            @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  bus              Bus?                @relation(fields: [busId], references: [id], onDelete: SetNull)
+  hotel            Hotel?              @relation(fields: [hotelId], references: [id], onDelete: SetNull)
+  seatReservations BusSeatReservation[]
+  roomAllocations  HotelRoomAllocation[]
 
   @@index([userId])
   @@index([bookingId])
@@ -364,6 +449,28 @@ enum PaymentStatus {
   FAILED
   REFUNDED
   CANCELLED
+}
+
+enum SeatType {
+  STANDARD
+  WINDOW
+  AISLE
+  SLEEPER
+  SEMI_SLEEPER
+}
+
+enum SeatReservationStatus {
+  HELD
+  BOOKED
+  RELEASED
+  EXPIRED
+}
+
+enum RoomAllocationStatus {
+  HELD
+  BOOKED
+  RELEASED
+  EXPIRED
 }
 
 // ============================================
