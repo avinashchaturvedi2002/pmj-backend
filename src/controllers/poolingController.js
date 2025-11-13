@@ -103,6 +103,12 @@ exports.getAllPoolGroups = async (req, res, next) => {
               email: true
             }
           },
+          selectedPackage: {
+            include: {
+              bus: true,
+              hotel: true
+            }
+          },
           members: {
             where: {
               OR: [
@@ -150,6 +156,12 @@ exports.getPoolGroupById = async (req, res, next) => {
             id: true,
             name: true,
             email: true
+          }
+        },
+        selectedPackage: {
+          include: {
+            bus: true,
+            hotel: true
           }
         },
         members: {
@@ -426,8 +438,23 @@ exports.getMyPoolGroups = async (req, res, next) => {
               email: true
             }
           },
+          selectedPackage: {
+            include: {
+              bus: true,
+              hotel: true
+            }
+          },
           members: {
-            where: { userId: req.user.id }
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true
+                }
+              }
+            },
+            orderBy: { joinedAt: 'asc' }
           },
           _count: {
             select: { members: true }
